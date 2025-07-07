@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,6 +10,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timedelta
 import statistics
+import hashlib
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,9 +26,34 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-# Define Models
+# Helper function to hash passwords
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# User Models
+class User(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    username: str
+    password_hash: str
+    created_date: datetime = Field(default_factory=datetime.utcnow)
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    created_date: datetime
+
+# Updated Goal Models (now with user_id)
 class Goal(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
     name: str
     target_amount: float
     current_amount: float = 0.0
@@ -42,6 +68,7 @@ class GoalCreate(BaseModel):
 class Transaction(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     goal_id: str
+    user_id: str
     amount: float
     transaction_date: datetime = Field(default_factory=datetime.utcnow)
     description: Optional[str] = None
@@ -59,10 +86,56 @@ class GoalProgress(BaseModel):
     estimated_completion_date: Optional[datetime]
     average_daily_savings: Optional[float]
 
+# Auth helper functions
+async def get_user_by_username(username: str):
+    return await db.users.find_one({"username": username})
+
+async def get_user_by_id(user_id: str):
+    return await db.users.find_one({"id": user_id})
+
+# User Authentication Endpoints
+@api_router.post("/register", response_model=UserResponse)
+async def register(user_input: UserCreate):
+    # Check if username already exists
+    existing_user = await get_user_by_username(user_input.username)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Create new user with hashed password
+    user_dict = user_input.dict()
+    user_dict["password_hash"] = hash_password(user_input.password)
+    user_dict.pop("password")  # Remove plain password
+    
+    user_obj = User(**user_dict)
+    await db.users.insert_one(user_obj.dict())
+    
+    return UserResponse(
+        id=user_obj.id,
+        username=user_obj.username,
+        created_date=user_obj.created_date
+    )
+
+@api_router.post("/login", response_model=UserResponse)
+async def login(user_input: UserLogin):
+    # Find user by username
+    user = await get_user_by_username(user_input.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    # Check password
+    if user["password_hash"] != hash_password(user_input.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    return UserResponse(
+        id=user["id"],
+        username=user["username"],
+        created_date=user["created_date"]
+    )
+
 # Helper function to calculate goal estimates
 async def calculate_goal_estimates(goal: Goal) -> dict:
     # Get all transactions for this goal
-    transactions = await db.transactions.find({"goal_id": goal.id}).to_list(1000)
+    transactions = await db.transactions.find({"goal_id": goal.id, "user_id": goal.user_id}).to_list(1000)
     
     if not transactions:
         return {
@@ -119,29 +192,40 @@ async def calculate_goal_estimates(goal: Goal) -> dict:
         "average_daily_savings": average_daily_savings
     }
 
-# Goal endpoints
+# Goal endpoints (now user-specific)
 @api_router.post("/goals", response_model=Goal)
-async def create_goal(goal_input: GoalCreate):
+async def create_goal(goal_input: GoalCreate, user_id: str):
+    # Verify user exists
+    user = await get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
     goal_dict = goal_input.dict()
+    goal_dict["user_id"] = user_id
     goal_obj = Goal(**goal_dict)
     await db.goals.insert_one(goal_obj.dict())
     return goal_obj
 
 @api_router.get("/goals", response_model=List[Goal])
-async def get_goals():
-    goals = await db.goals.find().to_list(1000)
+async def get_goals(user_id: str):
+    # Verify user exists
+    user = await get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    goals = await db.goals.find({"user_id": user_id}).to_list(1000)
     return [Goal(**goal) for goal in goals]
 
 @api_router.get("/goals/{goal_id}", response_model=Goal)
-async def get_goal(goal_id: str):
-    goal = await db.goals.find_one({"id": goal_id})
+async def get_goal(goal_id: str, user_id: str):
+    goal = await db.goals.find_one({"id": goal_id, "user_id": user_id})
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     return Goal(**goal)
 
 @api_router.get("/goals/{goal_id}/progress", response_model=GoalProgress)
-async def get_goal_progress(goal_id: str):
-    goal = await db.goals.find_one({"id": goal_id})
+async def get_goal_progress(goal_id: str, user_id: str):
+    goal = await db.goals.find_one({"id": goal_id, "user_id": user_id})
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     
@@ -161,27 +245,28 @@ async def get_goal_progress(goal_id: str):
     )
 
 @api_router.delete("/goals/{goal_id}")
-async def delete_goal(goal_id: str):
-    # Delete the goal
-    result = await db.goals.delete_one({"id": goal_id})
+async def delete_goal(goal_id: str, user_id: str):
+    # Delete the goal (only if it belongs to the user)
+    result = await db.goals.delete_one({"id": goal_id, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Goal not found")
     
     # Delete all transactions for this goal
-    await db.transactions.delete_many({"goal_id": goal_id})
+    await db.transactions.delete_many({"goal_id": goal_id, "user_id": user_id})
     
     return {"message": "Goal deleted successfully"}
 
-# Transaction endpoints
+# Transaction endpoints (now user-specific)
 @api_router.post("/transactions", response_model=Transaction)
-async def add_transaction(transaction_input: TransactionCreate):
-    # Check if goal exists
-    goal = await db.goals.find_one({"id": transaction_input.goal_id})
+async def add_transaction(transaction_input: TransactionCreate, user_id: str):
+    # Check if goal exists and belongs to user
+    goal = await db.goals.find_one({"id": transaction_input.goal_id, "user_id": user_id})
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     
     # Create transaction
     transaction_dict = transaction_input.dict()
+    transaction_dict["user_id"] = user_id
     transaction_obj = Transaction(**transaction_dict)
     await db.transactions.insert_one(transaction_obj.dict())
     
@@ -198,20 +283,20 @@ async def add_transaction(transaction_input: TransactionCreate):
         update_data["completion_date"] = datetime.utcnow()
     
     await db.goals.update_one(
-        {"id": transaction_input.goal_id},
+        {"id": transaction_input.goal_id, "user_id": user_id},
         {"$set": update_data}
     )
     
     return transaction_obj
 
 @api_router.get("/transactions/{goal_id}", response_model=List[Transaction])
-async def get_transactions(goal_id: str):
-    transactions = await db.transactions.find({"goal_id": goal_id}).to_list(1000)
+async def get_transactions(goal_id: str, user_id: str):
+    transactions = await db.transactions.find({"goal_id": goal_id, "user_id": user_id}).to_list(1000)
     return [Transaction(**transaction) for transaction in transactions]
 
 @api_router.get("/")
 async def root():
-    return {"message": "Financial Goal Tracker API"}
+    return {"message": "Financial Goal Tracker API with User Authentication"}
 
 # Include the router in the main app
 app.include_router(api_router)

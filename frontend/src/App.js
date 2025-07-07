@@ -6,6 +6,18 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 function App() {
+  // Authentication state
+  const [user, setUser] = useState(null);
+  const [showLoginForm, setShowLoginForm] = useState(false);
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [isLogin, setIsLogin] = useState(true);
+
+  // Login form states
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  // Existing states
   const [goals, setGoals] = useState([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedGoal, setSelectedGoal] = useState(null);
@@ -17,14 +29,78 @@ function App() {
   const [addMoneyAmount, setAddMoneyAmount] = useState("");
   const [addMoneyDescription, setAddMoneyDescription] = useState("");
 
-  // Fetch goals on component mount
+  // Check for existing user session on component mount
   useEffect(() => {
-    fetchGoals();
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      setUser(JSON.parse(storedUser));
+    }
   }, []);
 
-  const fetchGoals = async () => {
+  // Fetch goals when user is logged in
+  useEffect(() => {
+    if (user) {
+      fetchGoals();
+    }
+  }, [user]);
+
+  // Authentication functions
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    
     try {
-      const response = await axios.get(`${API}/goals`);
+      const response = await axios.post(`${API}/login`, {
+        username: username,
+        password: password
+      });
+      
+      const userData = response.data;
+      setUser(userData);
+      localStorage.setItem("user", JSON.stringify(userData));
+      
+      setUsername("");
+      setPassword("");
+      setShowLoginForm(false);
+    } catch (error) {
+      setAuthError(error.response?.data?.detail || "Login failed");
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    
+    try {
+      const response = await axios.post(`${API}/register`, {
+        username: username,
+        password: password
+      });
+      
+      const userData = response.data;
+      setUser(userData);
+      localStorage.setItem("user", JSON.stringify(userData));
+      
+      setUsername("");
+      setPassword("");
+      setShowRegisterForm(false);
+    } catch (error) {
+      setAuthError(error.response?.data?.detail || "Registration failed");
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem("user");
+    setGoals([]);
+    setGoalProgress({});
+  };
+
+  const fetchGoals = async () => {
+    if (!user) return;
+    
+    try {
+      const response = await axios.get(`${API}/goals?user_id=${user.id}`);
       setGoals(response.data);
       
       // Fetch progress for each goal
@@ -37,8 +113,10 @@ function App() {
   };
 
   const fetchGoalProgress = async (goalId) => {
+    if (!user) return;
+    
     try {
-      const response = await axios.get(`${API}/goals/${goalId}/progress`);
+      const response = await axios.get(`${API}/goals/${goalId}/progress?user_id=${user.id}`);
       setGoalProgress(prev => ({
         ...prev,
         [goalId]: response.data
@@ -50,8 +128,10 @@ function App() {
 
   const createGoal = async (e) => {
     e.preventDefault();
+    if (!user) return;
+    
     try {
-      await axios.post(`${API}/goals`, {
+      await axios.post(`${API}/goals?user_id=${user.id}`, {
         name: goalName,
         target_amount: parseFloat(targetAmount)
       });
@@ -67,10 +147,10 @@ function App() {
 
   const addMoney = async (e) => {
     e.preventDefault();
-    if (!selectedGoal) return;
+    if (!selectedGoal || !user) return;
     
     try {
-      await axios.post(`${API}/transactions`, {
+      await axios.post(`${API}/transactions?user_id=${user.id}`, {
         goal_id: selectedGoal.id,
         amount: parseFloat(addMoneyAmount),
         description: addMoneyDescription
@@ -86,9 +166,11 @@ function App() {
   };
 
   const deleteGoal = async (goalId) => {
+    if (!user) return;
+    
     if (window.confirm("Are you sure you want to delete this goal?")) {
       try {
-        await axios.delete(`${API}/goals/${goalId}`);
+        await axios.delete(`${API}/goals/${goalId}?user_id=${user.id}`);
         fetchGoals();
       } catch (error) {
         console.error("Error deleting goal:", error);
@@ -112,12 +194,123 @@ function App() {
     return `${Math.ceil(days / 365)} years`;
   };
 
+  // If user is not logged in, show login/register interface
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">💰 Goal Tracker</h1>
+            <p className="text-gray-600">Track your personal savings goals!</p>
+          </div>
+
+          {!showLoginForm && !showRegisterForm && (
+            <div className="space-y-4">
+              <button
+                onClick={() => setShowLoginForm(true)}
+                className="w-full bg-blue-500 hover:bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold transition-colors duration-200"
+              >
+                Login
+              </button>
+              <button
+                onClick={() => setShowRegisterForm(true)}
+                className="w-full bg-green-500 hover:bg-green-600 text-white py-3 px-6 rounded-lg font-semibold transition-colors duration-200"
+              >
+                Register
+              </button>
+            </div>
+          )}
+
+          {(showLoginForm || showRegisterForm) && (
+            <div>
+              <h2 className="text-2xl font-bold mb-6 text-center">
+                {showLoginForm ? "Login" : "Register"}
+              </h2>
+              
+              {authError && (
+                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                  {authError}
+                </div>
+              )}
+
+              <form onSubmit={showLoginForm ? handleLogin : handleRegister} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Username
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Enter your username"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div className="flex space-x-3">
+                  <button
+                    type="submit"
+                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded-lg font-medium transition-colors duration-200"
+                  >
+                    {showLoginForm ? "Login" : "Register"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLoginForm(false);
+                      setShowRegisterForm(false);
+                      setAuthError("");
+                      setUsername("");
+                      setPassword("");
+                    }}
+                    className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 py-2 px-4 rounded-lg font-medium transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Main app interface (shown when user is logged in)
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="container mx-auto px-4 py-8">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2">💰 Goal Tracker</h1>
-          <p className="text-gray-600">Track your savings goals and see when you'll reach them!</p>
+        {/* Header with user info and logout */}
+        <div className="flex justify-between items-center mb-8">
+          <div className="text-center flex-1">
+            <h1 className="text-4xl font-bold text-gray-800 mb-2">💰 Goal Tracker</h1>
+            <p className="text-gray-600">Track your savings goals and see when you'll reach them!</p>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className="text-right">
+              <p className="text-sm text-gray-600">Welcome back,</p>
+              <p className="font-semibold text-gray-800">{user.username}</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium transition-colors duration-200"
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         {/* Create Goal Button */}
