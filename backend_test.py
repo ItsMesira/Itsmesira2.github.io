@@ -5,15 +5,8 @@ import time
 import unittest
 import uuid
 
-# Get the backend URL from the frontend .env file
-with open('/app/frontend/.env', 'r') as f:
-    for line in f:
-        if line.startswith('REACT_APP_BACKEND_URL='):
-            BACKEND_URL = line.strip().split('=')[1].strip('"\'')
-            break
-
-# Ensure the URL doesn't have quotes
-BACKEND_URL = BACKEND_URL.strip('"\'')
+# Use local backend URL for testing
+BACKEND_URL = "http://localhost:8001"
 API_URL = f"{BACKEND_URL}/api"
 
 class FinancialGoalAPITest(unittest.TestCase):
