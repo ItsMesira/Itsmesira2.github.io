@@ -122,15 +122,18 @@ backend:
         
   - task: "Transaction Tracking API"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Created transaction API to add money to goals and track transaction history"
+      - working: true
+        agent: "testing"
+        comment: "Tested Transaction API endpoints. Adding transactions correctly updates goal's current_amount. Transaction history retrieval works properly. All tests passed successfully."
         
   - task: "Estimation Algorithm"
     implemented: true
