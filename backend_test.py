@@ -4,9 +4,12 @@ from datetime import datetime, timedelta
 import time
 import unittest
 import uuid
+import os
+from dotenv import load_dotenv
 
-# Use local backend URL for testing
-BACKEND_URL = "http://localhost:8001"
+# Load environment variables from frontend .env file to get the backend URL
+load_dotenv("/app/frontend/.env")
+BACKEND_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")
 API_URL = f"{BACKEND_URL}/api"
 
 class FinancialGoalAPITest(unittest.TestCase):
